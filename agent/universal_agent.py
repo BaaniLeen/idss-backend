@@ -238,14 +238,17 @@ def _detect_excluded_brands(message: str) -> List[str]:
         "MSI", "Razer", "Samsung", "Microsoft", "LG", "Gigabyte",
         "Framework", "System76", "ROG", "Alienware",
     ]
+    # Lets "bad experiences with Dell" resolve to Dell; without this, the first token after the keyword is "experiences", which is not a brand.
     _excl_kw_pat = re.compile(
-        r'(?:no|not|never|anything but|avoid|hate|refuse|bad|terrible|skip)\s+([A-Za-z][A-Za-z0-9\- ]{1,30})',
-        re.IGNORECASE
+        r'(?:no|not|never|anything but|avoid|hate|refuse|bad|terrible|awful|poor|skip)'
+        r'(?:\s+experiences?\s+with)?'
+        r'\s+([A-Za-z][A-Za-z0-9\- ]{1,30})',
+        re.IGNORECASE,
     )
     excl_brands: List[str] = []
-    for _m in _excl_kw_pat.finditer(message):
-        raw_group = _m.group(1).strip()
-        parts = re.split(r'\s+(?:or|and)\s+|[,;]\s*', raw_group)
+
+    def _append_brands_from_fragment(raw_group: str) -> None:
+        parts = re.split(r'\s+(?:or|and)\s+|[,;]\s*', raw_group.strip())
         for part in parts:
             candidate = part.strip().split()[0]
             candidate_normalized = _BRAND_VALUE_ALIASES.get(candidate.lower(), candidate)
@@ -253,6 +256,9 @@ def _detect_excluded_brands(message: str) -> List[str]:
                 if brand.lower() == candidate_normalized.lower():
                     if brand not in excl_brands:
                         excl_brands.append(brand)
+
+    for _m in _excl_kw_pat.finditer(message):
+        _append_brands_from_fragment(_m.group(1))
 
     # LLM semantic detection — handles indirect phrases, sarcasm, bad experiences
     _llm_excl = _extract_excluded_brands_semantic(message)

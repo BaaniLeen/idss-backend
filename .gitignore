@@ -121,3 +121,8 @@ secrets.yaml
 credentials.json
 
 .claude/
+
+# Markdown except README (local notes / exam writeups stay untracked)
+*.md
+!**/README.md
+!**/readme.md

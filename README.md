@@ -21,6 +21,21 @@ bash run_all_tests.sh
 - Frontend: <https://idss-web.vercel.app> (Vercel)
 - Backend API: see Railway dashboard → your project → deployment URL
 
+### Take-home exam Q1 (2026) — intent recognition
+
+Write-up (intent inventory, taxonomy, implemented fixes, tests, reproduction): **[TAKEHOME_Q1.md](./TAKEHOME_Q1.md)**.
+
+Quick check (Q1 regression tests):
+
+```bash
+cd idss-backend
+python -m pytest agent/tests/test_chat_endpoint.py::test_post_rec_compare_lay_these_out_fast_path \
+  agent/tests/test_chat_endpoint.py::test_add_to_cart_ill_take_second_no_cart_keyword \
+  agent/tests/test_chat_endpoint.py::test_add_to_cart_ill_take_it_defaults_to_first \
+  agent/tests/test_chat_endpoint.py::test_post_rec_anaphora_downgrades_new_search_no_session_reset \
+  agent/tests/test_universal_agent.py::test_excluded_brands_bad_experiences_with_brand_regex -v
+```
+
 ---
 
 An LLM-driven Interactive Decision Support System that helps users find products through conversational interviews. The **Universal Agent** detects the user's domain, extracts preferences via structured LLM calls, and generates natural follow-up questions before delivering recommendations. Supports **vehicles**, **laptops**, **books**, and **24,000+ electronics** products.

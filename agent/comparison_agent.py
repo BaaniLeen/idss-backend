@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from typing import Any, Dict, List, Optional
 
 # Model configuration — single model for all LLM calls, set via environment
@@ -172,6 +173,8 @@ async def detect_post_rec_intent(message: str) -> str:
             "- 'targeted_qa' → asking for THE BEST one or two; only 1-2 products will be highlighted.\n"
             "- 'compare' → asking for ALL products to be shown side by side.\n"
             "- Use 'new_search' ONLY for fully self-contained new queries naming a completely different product or use case.\n"
+            "- NEVER use 'new_search' when the user refers to the ON-SCREEN list with these, those, them, "
+            "or phrasing like 'first one' / 'second one' about the recommendations — those are follow-ups.\n"
             "- 'new_search' is NEVER correct for: 'what about X', 'how about X', 'what if X', 'does it need X', "
             "'can it be X', 'show me the latest', 'refurbished is fine', 'what model', or any question that depends on context.\n"
             "- Default to 'targeted_qa' when unsure between compare and targeted_qa.\n"
@@ -213,7 +216,12 @@ async def detect_post_rec_intent(message: str) -> str:
         )
         if any(sig in lower for sig in _TARGETED_SIGNALS):
             return "targeted_qa"
-        _no_anaphora = not any(ref in lower for ref in ("these", " them", "those", "current", "shown"))
+        # Word-boundary plural anaphora; substring " them" missed sentence-initial "them".
+        _no_anaphora = (
+            re.search(r"\b(these|those|them)\b", lower) is None
+            and "current" not in lower
+            and "shown" not in lower
+        )
         _has_specs = any(sig in lower for sig in ("rtx ", "gtx ", "ryzen", "i7", "i9", "i5", "32gb", "16gb", "ram", "budget"))
         _has_new_intent = any(sig in lower for sig in ("i want to play", "i need a laptop for", "looking for a laptop that", "need rtx", "gaming laptop with"))
         if _no_anaphora and (_has_new_intent or (_has_specs and ("$" in lower or "budget" in lower))):

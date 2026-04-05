@@ -998,6 +998,28 @@ def _explain_best_value(product: dict, domain: str, all_products: Optional[list]
 # Post-Recommendation Handlers
 # ============================================================================
 
+# Whole-message match: user commits to the default (first) recommendation without naming cart or ordinal.
+_CASUAL_TAKE_DEFAULT_RE = re.compile(
+    r"^\s*i'?ll\s+take\s+(it|that)\s*\.?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _message_references_shown_recommendation_set(msg_lower: str) -> bool:
+    """
+    Heuristic: user is pointing at the visible recommendation list, not starting a tabula-rasa search.
+
+    Used only to veto a mistaken LLM 'new_search' (which would reset session state).  Keep this
+    conservative: prefer missing a veto over false negatives that still wipe context — but
+    pronouns like these/those/them and 'second one' are strong signals in post-rec chat.
+    """
+    if re.search(r"\b(these|those|them)\b", msg_lower):
+        return True
+    if re.search(r"\b(first|second|third|fourth|1st|2nd|3rd|4th)\s+one\b", msg_lower):
+        return True
+    return False
+
+
 async def _handle_post_recommendation(
     request: ChatRequest, session, session_id: str, session_manager
 ) -> Optional[ChatResponse]:
@@ -1150,6 +1172,7 @@ async def _handle_post_recommendation(
         "contrast",                    # "contrast X and Y"
         "how does it compare",         # "how does this compare to the others?"
         "lay them out",                # informal: "can you lay them out side by side?"
+        "lay these out",               # anaphoric "these" (e.g. lay these out side by side)
         "side by side",
         "break down the differences",
         "what sets them apart",
@@ -1198,6 +1221,9 @@ async def _handle_post_recommendation(
         "similar laptops", "similar products",
         "something similar", "similar to",  # "show me something similar to the best pick"
     )
+    # Whether intent came from the deterministic chain vs detect_post_rec_intent (LLM / fallback).
+    _post_rec_router_layer = "fast_keyword"
+
     # Guard: don't intercept for best-value when the message is really a see-similar request
     if any(kw in msg_lower for kw in _FAST_BEST_VALUE_KWS) and "similar" not in msg_lower:
         intent = "best_value"
@@ -1220,8 +1246,19 @@ async def _handle_post_recommendation(
         # misclassification. Falls through to the research keyword handler further below.
         intent = "other"
     elif (
-        ("cart" in msg_lower or "favorites" in msg_lower or "wishlist" in msg_lower or "bag" in msg_lower)
-        and any(kw in msg_lower for kw in ("add", "put", "save", "get", "take", "want", "buy"))
+        (
+            ("cart" in msg_lower or "favorites" in msg_lower or "wishlist" in msg_lower or "bag" in msg_lower)
+            and any(kw in msg_lower for kw in ("add", "put", "save", "get", "take", "want", "buy"))
+        )
+        or (
+            # Purchase phrasing without naming cart/bag — still resolvable by ordinal below.
+            re.search(r"\b(i'?ll\s+take|i\s+will\s+take|i'?ll\s+have|let\s+me\s+get|give\s+me\s+the)\b", msg_lower)
+            and re.search(
+                r"\b(first|second|third|fourth|1st|2nd|3rd|4th|one|two|three|four)\b",
+                msg_lower,
+            )
+        )
+        or bool(_CASUAL_TAKE_DEFAULT_RE.match(clean_message.strip()))
     ):
         # "add X to my cart" — catch BEFORE the LLM call so product names with
         # specs (e.g. "add Lenovo IdeaPad L340 Gaming Laptop, 15.6 Inch FHD to cart")
@@ -1229,6 +1266,31 @@ async def _handle_post_recommendation(
         intent = "add_to_cart"
     else:
         intent = await detect_post_rec_intent(clean_message)
+        _post_rec_router_layer = "llm_router"
+
+    # LLMs sometimes emit 'new_search' even when the user clearly refers to the on-screen set.
+    # Resetting the session is destructive; downgrade to targeted_qa so we stay in context.
+    _anaphora_blocked_reset = False
+    if intent == "new_search" and _message_references_shown_recommendation_set(msg_lower):
+        logger.info(
+            "post_rec_new_search_downgrade",
+            "Anaphora detected — not resetting session; using targeted_qa instead",
+            {"session_id": session_id, "msg_preview": clean_message[:72]},
+        )
+        intent = "targeted_qa"
+        _anaphora_blocked_reset = True
+
+    logger.info(
+        "post_rec_intent_resolved",
+        f"intent={intent} layer={_post_rec_router_layer}",
+        {
+            "session_id": session_id,
+            "router_layer": _post_rec_router_layer,
+            "intent": intent,
+            "anaphora_blocked_reset": _anaphora_blocked_reset,
+            "msg_preview": clean_message[:72],
+        },
+    )
 
     # -----------------------------------------------------------------------
     # New-search intent: user sent a completely fresh product query unrelated

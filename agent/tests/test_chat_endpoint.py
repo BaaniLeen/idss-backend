@@ -1,6 +1,6 @@
 import asyncio
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from agent.chat_endpoint import (
     process_chat,
@@ -8,6 +8,7 @@ from agent.chat_endpoint import (
     _compute_diversity_score,
     _diversify_by_brand,
     _handle_post_recommendation,
+    _message_references_shown_recommendation_set,
 )
 from agent.interview.session_manager import InterviewSessionState, STAGE_RECOMMENDATIONS
 
@@ -175,6 +176,89 @@ def test_add_to_cart_ordinal_second():
     assert "Dell XPS 15 9510" in resp.message
     assert resp.cart_action["product"]["id"] == "prod-002"
     sm.add_favorite.assert_called_once_with("s2", "prod-002")
+
+
+def test_message_references_shown_recommendation_set():
+    """Heuristic anaphora detector for vetoing mistaken new_search."""
+    assert _message_references_shown_recommendation_set("cheaper options for these please") is True
+    assert _message_references_shown_recommendation_set("i'll take the second one") is True
+    assert _message_references_shown_recommendation_set("need a gaming laptop with rtx 4060") is False
+
+
+def test_add_to_cart_ill_take_it_defaults_to_first():
+    """Whole-message 'I'll take it' → first recommended product (no ordinal)."""
+    session = _make_rec_session()
+    sm = _make_mock_sm(session)
+    req = ChatRequest(message="  I'll take it.  ", session_id="s-take-it")
+
+    resp = asyncio.run(_handle_post_recommendation(req, session, "s-take-it", sm))
+
+    assert resp is not None
+    assert resp.cart_action is not None
+    assert resp.cart_action["product"]["id"] == "prod-001"
+    sm.add_favorite.assert_called_once_with("s-take-it", "prod-001")
+
+
+def test_post_rec_anaphora_downgrades_new_search_no_session_reset():
+    """If LLM wrongly returns new_search but message references shown set, do not reset."""
+    session = _make_rec_session()
+    sm = _make_mock_sm(session)
+    sm.reset_session = MagicMock()
+    req = ChatRequest(message="show me cheaper options for these", session_id="s-veto")
+
+    async def _fake_detect(_msg):
+        return "new_search"
+
+    mock_tqa = AsyncMock(return_value=("Try filtering under $800.", ["prod-001"], []))
+    with (
+        patch("agent.chat_endpoint.detect_post_rec_intent", side_effect=_fake_detect),
+        patch("agent.chat_endpoint.generate_targeted_answer", mock_tqa),
+        patch(
+            "app.formatters.format_product",
+            side_effect=lambda p, d: _make_unified_product_mock(p["id"], p["name"]),
+        ),
+    ):
+        resp = asyncio.run(_handle_post_recommendation(req, session, "s-veto", sm))
+
+    sm.reset_session.assert_not_called()
+    assert resp is not None
+    mock_tqa.assert_awaited_once()
+
+
+def test_add_to_cart_ill_take_second_no_cart_keyword():
+    """'I'll take the second one' → add_to_cart without saying cart/bag."""
+    session = _make_rec_session()
+    sm = _make_mock_sm(session)
+    req = ChatRequest(message="I'll take the second one", session_id="s-take-2")
+
+    resp = asyncio.run(_handle_post_recommendation(req, session, "s-take-2", sm))
+
+    assert resp is not None
+    assert resp.cart_action is not None
+    assert resp.cart_action["product"]["id"] == "prod-002"
+    sm.add_favorite.assert_called_once_with("s-take-2", "prod-002")
+
+
+def test_post_rec_compare_lay_these_out_fast_path():
+    """'lay these out side by side' hits compare fast-path (anaphoric these)."""
+    session = _make_rec_session()
+    sm = _make_mock_sm(session)
+    req = ChatRequest(message="Can you lay these out side by side?", session_id="s-lay-these")
+
+    mock_narrative = AsyncMock(return_value=("Side by side summary.", ["prod-001", "prod-002"], []))
+    with (
+        patch("agent.chat_endpoint.generate_comparison_narrative", mock_narrative),
+        patch(
+            "app.formatters.format_product",
+            side_effect=lambda p, d: _make_unified_product_mock(p["id"], p["name"]),
+        ),
+    ):
+        resp = asyncio.run(_handle_post_recommendation(req, session, "s-lay-these", sm))
+
+    assert resp is not None
+    assert resp.response_type == "recommendations"
+    assert resp.bucket_labels == ["Compared Items"]
+    mock_narrative.assert_awaited_once()
 
 
 def test_add_to_cart_fuzzy_name():

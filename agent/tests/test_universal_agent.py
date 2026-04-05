@@ -9,8 +9,8 @@ Covers:
 - query_rewriter integration: accessory disambiguation wired in
 """
 
-from unittest.mock import MagicMock
-from agent.universal_agent import UniversalAgent
+from unittest.mock import MagicMock, patch
+from agent.universal_agent import UniversalAgent, _detect_excluded_brands
 from agent.domain_registry import get_domain_schema
 
 
@@ -240,6 +240,15 @@ def test_excluded_brands_no_duplicate_regex():
     if isinstance(excl, str):
         excl = [b.strip() for b in excl.split(",") if b.strip()]
     assert excl.count("HP") == 1, f"HP duplicated: {excl}"
+
+
+def test_excluded_brands_bad_experiences_with_brand_regex():
+    """Indirect exclusion: 'bad experiences with Dell' (regex; LLM patched off)."""
+    with patch("agent.universal_agent._extract_excluded_brands_semantic", return_value=[]):
+        got = _detect_excluded_brands(
+            "I've had bad experiences with Dell, show me something reliable"
+        )
+    assert "Dell" in got
 
 
 def test_mind_change_removes_brand_from_exclusions():
