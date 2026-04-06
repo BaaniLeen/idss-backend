@@ -122,7 +122,7 @@ credentials.json
 
 .claude/
 
-# Markdown except README (local notes / exam writeups stay untracked)
+# Markdown except README
 *.md
 !**/README.md
 !**/readme.md
